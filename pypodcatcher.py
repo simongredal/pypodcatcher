@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!bin/python3
 
 import feedparser, opml, urllib3
 import os, shutil, argparse
@@ -10,7 +10,7 @@ parser =  argparse.ArgumentParser(description='Small utility to download complet
 parser.add_argument('OPML', help='Path or URL to OPML file with podcasts.')
 parser.add_argument('-d', '--dir', nargs='?', help='Directory to save downloads in. Default is current directory')
 
-parser.add_argument('--limit-days', metavar='N', nargs=1, type=int, help='Limit to downloading episodes newer than N days old.')
+parser.add_argument('--limit-days', metavar='N', nargs=1, type=int, help='Limit to downloading episodes newer than N days old. (Not implemented)')
 parser.add_argument('--limit-episodes', metavar='N', nargs=1, type=int, help='Limit to downloading the N newest episodes.')
 
 parser.add_argument('--delete-old', action='store_true', help="Deletes any episode that does not fall within the limit parameters.")
@@ -21,7 +21,7 @@ parser.add_argument('-l', '--log', nargs=1, help='Saves log output to file.')
 args = parser.parse_args()
 
 # Ugly-ass hack for getting the file extension without having to regex through a url
-file_extensions = {'audio/mpeg': '.mp3'}
+file_extensions = {'audio/mpeg': '.mp3', 'audio/x-m4a': '.m4a', 'audio/mpeg4-generic': '.mp4', 'audio/mp4': '.mp4', 'audio/ogg': '.ogg', 'audio/vorbis': '.ogg'}
 
 # Remove characters that doesn't play well with 'nix and mac filesystems.'
 def sanitize_filename(filename):
@@ -55,15 +55,23 @@ urllib3.disable_warnings()
 
 # Go through each feed
 for index, opml_outline in enumerate(parsed_opml):
+	#Read the RSS Feed
 	rss_feed = feedparser.parse(opml_outline.xmlUrl)
 	
-	logger(1, f'Downloading podcast {index+1}/{len(parsed_opml)}: {rss_feed.feed.title} with {len(rss_feed.entries)} entries.')
+	# Get the feed title, but sometimes the feed title isn't defined, in that case get it from the opml file instead.
+	try:
+		rss_feed_title = rss_feed.feed.title
+	except AttributeError:
+		rss_feed_title = opml_outline.title
+	
+	
+	logger(1, f'Downloading podcast {index+1}/{len(parsed_opml)}: {rss_feed_title} with {len(rss_feed.entries)} entries.')
 	
 	# Make the directory for the podcast
 	# https://stackoverflow.com/questions/12517451/automatically-creating-directories-with-file-output
 	os.chdir(download_dir)
-	os.makedirs(rss_feed.feed.title, exist_ok=True)
-	os.chdir(rss_feed.feed.title)
+	os.makedirs(rss_feed_title, exist_ok=True)
+	os.chdir(rss_feed_title)
 
 	# Loop through each episode in the RSS feed
 	for index, entry in enumerate(rss_feed.entries):

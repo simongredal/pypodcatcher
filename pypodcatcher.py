@@ -12,6 +12,7 @@ parser.add_argument('-d', '--dir', nargs='?', help='Directory to save downloads 
 
 parser.add_argument('--limit-days', metavar='N', nargs=1, type=int, help='Limit to downloading episodes newer than N days old. (Not implemented)')
 parser.add_argument('--limit-episodes', metavar='N', nargs=1, type=int, help='Limit to downloading the N newest episodes.')
+parser.add_argument('--reverse', action='store_true', help='Go through the entries in the RSS feeds en reverse order. (i.e. from old to new)')
 
 parser.add_argument('--delete-old', action='store_true', help="Deletes any episode that does not fall within the limit parameters.")
 parser.add_argument('-r', '--reset', action='store_true', help='Deletes contents of the download directory before downloading.')
@@ -57,7 +58,10 @@ urllib3.disable_warnings()
 for index, opml_outline in enumerate(parsed_opml):
 	#Read the RSS Feed
 	rss_feed = feedparser.parse(opml_outline.xmlUrl)
-	
+	#Optionally go through the feed from old to new
+	if args.reverse:
+		rss_feed.entries.reverse()
+
 	# Get the feed title, but sometimes the feed title isn't defined, in that case get it from the opml file instead.
 	try:
 		rss_feed_title = rss_feed.feed.title

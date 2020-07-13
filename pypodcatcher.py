@@ -94,7 +94,7 @@ for index, opml_outline in enumerate(parsed_opml):
 		month = f'{entry.published_parsed[1]:02}'
 		day = f'{entry.published_parsed[2]:02}'
 		date=f'{year}-{month}-{day}'
-		audio_filename = f'{date} | {entry.title}'
+		audio_filename = f'[{date}] {entry.title}'
 
 		# Get the url of the enclosed audio file
 		try:

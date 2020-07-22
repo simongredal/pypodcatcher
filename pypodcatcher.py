@@ -56,8 +56,15 @@ urllib3.disable_warnings()
 
 # Go through each feed
 for index, opml_outline in enumerate(parsed_opml):
-	#Read the RSS Feed
-	rss_feed = feedparser.parse(opml_outline.xmlUrl)
+	# Read the RSS Feed from the 'xmlurl' attribute of the opml outline
+	# We go through some trouble to normalize formatting of the attribute keys
+	# since they are case-sensitive *sigh*  -.-
+	opml_outline_keys = opml_outline._root.attrib.keys()
+	for index, key in enumerate(opml_outline_keys):
+		if (key.lower() == 'xmlurl'):
+			rss_feed = feedparser.parse( opml_outline._root.attrib[key] )
+			break
+
 	#Optionally go through the feed from old to new
 	if args.reverse:
 		rss_feed.entries.reverse()

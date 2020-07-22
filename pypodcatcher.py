@@ -86,7 +86,7 @@ for index, opml_outline in enumerate(parsed_opml):
 	# Loop through each episode in the RSS feed
 	for index, entry in enumerate(rss_feed.entries):
 		# Exit episode loop early if episode-limit is set and has been reached.
-        	if (args.limit_episodes is not None) and (index >= args.limit_episodes[0]):
+		if (args.limit_episodes is not None) and (index >= args.limit_episodes[0]):
 			continue
 		# TODO: Exit episode loop early if days-limit is set and has been reached.
 		# if (args.limit_days is not None) and 

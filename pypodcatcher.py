@@ -74,10 +74,9 @@ for index, opml_outline in enumerate(parsed_opml):
 		rss_feed_title = rss_feed.feed.title
 	except AttributeError:
 		rss_feed_title = opml_outline.title
-	
-	
+
 	logger(1, f'Downloading podcast {index+1}/{len(parsed_opml)}: {rss_feed_title} with {len(rss_feed.entries)} entries.')
-	
+
 	# Make the directory for the podcast
 	# https://stackoverflow.com/questions/12517451/automatically-creating-directories-with-file-output
 	os.chdir(download_dir)
@@ -86,17 +85,17 @@ for index, opml_outline in enumerate(parsed_opml):
 
 	# Loop through each episode in the RSS feed
 	for index, entry in enumerate(rss_feed.entries):
-	# Exit episode loop early if episode-limit is set and has been reached.
-		if (args.limit_episodes is not None) and (index >= args.limit_episodes[0]):
+		# Exit episode loop early if episode-limit is set and has been reached.
+        	if (args.limit_episodes is not None) and (index >= args.limit_episodes[0]):
 			continue
-	# TODO: Exit episode loop early if days-limit is set and has been reached.
+		# TODO: Exit episode loop early if days-limit is set and has been reached.
 		# if (args.limit_days is not None) and 
 
 		# Go to next episode if there are no enclosures in the episode.
 		if len(entry.enclosures) == 0:
-		    logger(2, f'No enclosure found in RSS entry, skipping {index+1}/{len(rss_feed.entries)}')
-		    continue
-		    
+			logger(2, f'No enclosure found in RSS entry, skipping {index+1}/{len(rss_feed.entries)}')
+			continue
+
 		year = f'{entry.published_parsed[0]:02}'
 		month = f'{entry.published_parsed[1]:02}'
 		day = f'{entry.published_parsed[2]:02}'
@@ -109,7 +108,7 @@ for index, opml_outline in enumerate(parsed_opml):
 		except AttributeError:
 			logger(2, f'No href found in RSS enclosure, skipping {index+1}/{len(rss_feed.entries)}')
 			continue
-			
+
 		# Find the Content-Type type in the RSS enclosure
 		try:
 			file_extension = file_extensions.get(entry.enclosures[0].type, '')
@@ -126,11 +125,10 @@ for index, opml_outline in enumerate(parsed_opml):
 				if os.path.exists(filename):
 					logger(2, f'File already exists, skipping {index+1}/{len(rss_feed.entries)}: {filename}')
 					continue
-					
+
 				with open(filename, 'wb') as audio_file:
 					logger(2, f'Downloading {index+1}/{len(rss_feed.entries)}: {filename}')
 					shutil.copyfileobj(r, audio_file)
-
 
 		else:
 			filename = sanitize_filename(audio_filename+file_extension)
@@ -139,7 +137,7 @@ for index, opml_outline in enumerate(parsed_opml):
 			if os.path.exists(filename):
 				logger(2, f'File already exists, skipping {index+1}/{len(rss_feed.entries)}: {filename}')
 				continue
-				
+
 			with http.request('GET', enclosure_url, preload_content=False, ) as r, open(filename, 'wb') as audio_file:
 				logger(2, f'Downloading {index+1}/{len(rss_feed.entries)}: {filename}')
 				shutil.copyfileobj(r, audio_file)

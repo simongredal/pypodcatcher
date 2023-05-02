@@ -15,6 +15,29 @@ def logger(indent, message):
         print('\t' * indent + message)
 
 
+def parse_args():
+    # Setup command line arguments and description, etc.
+    parser = argparse.ArgumentParser(description='Small utility to download complete podcasts from OPML files.')
+    parser.add_argument('OPML', help='Path or URL to OPML file with podcasts.')
+    parser.add_argument('-d', '--dir', nargs='?', help='Directory to save downloads in. Default is current directory')
+
+    parser.add_argument('--limit-days', metavar='N', nargs=1, type=int,
+                        help='Limit to downloading episodes newer than N days old. (Not implemented)')
+    parser.add_argument('--limit-episodes', metavar='N', nargs=1, type=int,
+                        help='Limit to downloading the N newest episodes.')
+    parser.add_argument('--reverse', action='store_true',
+                        help='Go through the entries in the RSS feeds en reverse order. (i.e. from old to new)')
+
+    parser.add_argument('--delete-old', action='store_true',
+                        help="Deletes any episode that does not fall within the limit parameters.")
+    parser.add_argument('-r', '--reset', action='store_true',
+                        help='Deletes contents of the download directory before downloading.')
+
+    parser.add_argument('-s', '--silent', action='store_true', help='Silences log output to sceen.')
+    parser.add_argument('-l', '--log', nargs=1, help='Saves log output to file.')
+    return parser.parse_args()
+
+
 def main():
     # Setup command line arguments and description, etc.
     parser = argparse.ArgumentParser(description='Small utility to download complete podcasts from OPML files.')

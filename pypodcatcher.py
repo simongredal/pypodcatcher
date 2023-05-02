@@ -106,6 +106,7 @@ def main():
         os.chdir(download_dir)
         os.makedirs(rss_feed_title, exist_ok=True)
         os.chdir(rss_feed_title)
+        existing_files = os.listdir()
 
         # Loop through each episode in the RSS feed
         for index_feed, entry in enumerate(rss_feed.entries):
@@ -133,6 +134,11 @@ def main():
                 logger(2, f'No href found in RSS enclosure, skipping {index_feed + 1}/{len(rss_feed.entries)}')
                 continue
 
+            # Skip download if the file already exists
+            if any((audio_filename == os.path.splitext(file) for file in existing_files)):
+                logger(2, f'File already exists, skipping {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
+                continue
+
             # Find the Content-Type type in the RSS enclosure
             file_extension = None
             try:
@@ -140,35 +146,17 @@ def main():
             except AttributeError:
                 pass
 
-            # If the Content-Type couldn't be found in the enclosure, get it when downloading
-            if file_extension is None:
-                with http.request('GET', enclosure_url, preload_content=False, ) as r:
+            with http.request('GET', enclosure_url, preload_content=False) as r:
+                # If the Content-Type couldn't be found in the enclosure, get it when downloading
+                if file_extension is None or file_extension == '':
                     file_extension = file_extensions.get(r.headers['Content-Type'], '')
-                    filename = sanitize_filename(audio_filename + file_extension)
 
-                    # Skip download if the file already exists
-                    if os.path.exists(filename):
-                        logger(2, f'File already exists, skipping {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
-                        continue
-
-                    with open('temporary_download_file', 'wb') as audio_file:
-                        logger(2, f'Downloading {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
-                        shutil.copyfileobj(r, audio_file)
-                        os.rename('temporary_download_file', filename)
-
-            else:
                 filename = sanitize_filename(audio_filename + file_extension)
 
-                # Skip download if the file already exists
-                if os.path.exists(filename):
-                    logger(2, f'File already exists, skipping {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
-                    continue
-
-                with http.request('GET', enclosure_url, preload_content=False, ) as r:
-                    with open('temporary_download_file', 'wb') as audio_file:
-                        logger(2, f'Downloading {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
-                        shutil.copyfileobj(r, audio_file)
-                        os.rename('temporary_download_file', filename)
+                with open('temporary_download_file', 'wb') as audio_file:
+                    logger(2, f'Downloading {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
+                    shutil.copyfileobj(r, audio_file)
+                    os.rename('temporary_download_file', filename)
 
 
 if __name__ == '__main__':

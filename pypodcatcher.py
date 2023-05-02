@@ -17,7 +17,7 @@ def sanitize_filename(filename):
 # Small logger.
 def the_logger(args, indent, message):
     if not args.silent:
-        print('\t' * indent + message)
+        print('\t' * indent + message, flush=True)
 
 
 def parse_args():

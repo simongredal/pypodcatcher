@@ -147,9 +147,10 @@ def main():
                         logger(2, f'File already exists, skipping {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
                         continue
 
-                    with open(filename, 'wb') as audio_file:
+                    with open('temporary_download_file', 'wb') as audio_file:
                         logger(2, f'Downloading {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
                         shutil.copyfileobj(r, audio_file)
+                        os.rename('temporary_download_file', filename)
 
             else:
                 filename = sanitize_filename(audio_filename + file_extension)
@@ -159,11 +160,15 @@ def main():
                     logger(2, f'File already exists, skipping {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
                     continue
 
-                with http.request('GET', enclosure_url, preload_content=False, ) as r, open(filename,
-                                                                                            'wb') as audio_file:
-                    logger(2, f'Downloading {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
-                    shutil.copyfileobj(r, audio_file)
+                with http.request('GET', enclosure_url, preload_content=False, ) as r:
+                    with open('temporary_download_file', 'wb') as audio_file:
+                        logger(2, f'Downloading {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
+                        shutil.copyfileobj(r, audio_file)
+                        os.rename('temporary_download_file', filename)
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        exit(1)

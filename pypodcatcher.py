@@ -67,7 +67,7 @@ for index, opml_outline in enumerate(parsed_opml):
     # We go through some trouble to normalize formatting of the attribute keys
     # since they are case-sensitive *sigh*  -.-
     opml_outline_keys = opml_outline._root.attrib.keys()
-    for index, key in enumerate(opml_outline_keys):
+    for _, key in enumerate(opml_outline_keys):
         if (key.lower() == 'xmlurl'):
             rss_feed = feedparser.parse(opml_outline._root.attrib[key])
             break

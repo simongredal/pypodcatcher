@@ -134,24 +134,28 @@ def main():
                 logger(2, f'No href found in RSS enclosure, skipping {index_feed + 1}/{len(rss_feed.entries)}')
                 continue
 
-            # Skip download if the file already exists
-            if any((audio_filename == os.path.splitext(file) for file in existing_files)):
-                logger(2, f'File already exists, skipping {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
-                continue
-
             # Find the Content-Type type in the RSS enclosure
             file_extension = None
+            filename = None
             try:
                 file_extension = file_extensions.get(entry.enclosures[0].type, '')
+                filename = sanitize_filename(audio_filename + file_extension)
             except AttributeError:
                 pass
+
+            # Skip download if the file already exists
+            if any((sanitize_filename(audio_filename) == os.path.splitext(file)[0] for file in existing_files)):
+                if file_extension is None:
+                    logger(2, f'File already exists, skipping {index_feed + 1}/{len(rss_feed.entries)}: {audio_file}')
+                else:
+                    logger(2, f'File already exists, skipping {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
+                continue
 
             with http.request('GET', enclosure_url, preload_content=False) as r:
                 # If the Content-Type couldn't be found in the enclosure, get it when downloading
                 if file_extension is None or file_extension == '':
                     file_extension = file_extensions.get(r.headers['Content-Type'], '')
-
-                filename = sanitize_filename(audio_filename + file_extension)
+                    filename = sanitize_filename(audio_filename + file_extension)
 
                 with open('temporary_download_file', 'wb') as audio_file:
                     logger(2, f'Downloading {index_feed + 1}/{len(rss_feed.entries)}: {filename}')

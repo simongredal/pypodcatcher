@@ -10,7 +10,7 @@ You need to have `python` and `pip` installed.
 
 I recommend running this in a virtual-env like so:
 
-``` sh
+```sh
 cd py-podcatcher/
 
 python -m venv venv
@@ -22,3 +22,11 @@ python pypodcatcher.py --help
 
 ## Notes
 Not all the options listed in the help text are actually implemented yet.
+
+## TODO
+
+- [ ] Don't do a HEAD request to figure out file extension when comparing filenames, it' slow
+- [ ] Fix podcast counter being stuck at 4 out of some number
+- [ ] Do asynchronous fetching with threads or queues  or generators or something
+- [ ] Structure code better
+- [ ] Flush when logging

@@ -152,6 +152,13 @@ def main():
                 continue
 
             with http.request('GET', enclosure_url, preload_content=False) as r:
+                if r.status not in range(200, 299):
+                    if file_extension is None:
+                        logger(2, f'Response had HTTP status {r.status}, skipping {index_feed + 1}/{len(rss_feed.entries)}: {audio_file}')
+                    else:
+                        logger(2, f'Response had HTTP status {r.status}, skipping {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
+                    continue
+
                 # If the Content-Type couldn't be found in the enclosure, get it when downloading
                 if file_extension is None or file_extension == '':
                     file_extension = file_extensions.get(r.headers['Content-Type'], '')

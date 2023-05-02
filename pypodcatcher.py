@@ -1,8 +1,12 @@
 #!bin/python3
+import argparse
 import functools
+import os
+import shutil
 
-import feedparser, opml, urllib3
-import os, shutil, argparse
+import feedparser
+import opml
+import urllib3
 
 
 # Remove characters that doesn't play well with 'nix and mac filesystems.'

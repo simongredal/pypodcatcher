@@ -1,66 +1,268 @@
-#!bin/python3
+import os, sys, pathlib, tempfile, shutil, traceback
 import argparse
-import functools
-import os
-import shutil
+import asyncio
+from dataclasses import dataclass
+from datetime import date
+from typing import Iterable
+from email.utils import parsedate_to_datetime as parse_date
 
-import feedparser
-import opml
-import urllib3
-
-
-# Remove characters that doesn't play well with 'nix and mac filesystems.'
-def sanitize_filename(filename):
-    return filename.replace('/', '-').replace(':', '')
-
-
-# Small logger.
-def the_logger(args, indent, message):
-    if not args.silent:
-        print('\t' * indent + message, flush=True)
+from lxml import etree
+from lxml.etree import ElementTree
+import httpx
 
 
 def parse_args():
     # Setup command line arguments and description, etc.
-    parser = argparse.ArgumentParser(description='Small utility to download complete podcasts from OPML files.')
-    parser.add_argument('OPML', help='Path or URL to OPML file with podcasts.')
+    parser = argparse.ArgumentParser(
+        prog='pypodcatcher.py',
+        description='Small utility to download complete podcasts from OPML files.'
+    )
+    parser.add_argument('opml', action='store',   help='Path to OPML.')
     parser.add_argument('-d', '--dir', nargs='?', help='Directory to save downloads in. Default is current directory')
 
-    parser.add_argument('--limit-days', metavar='N', nargs=1, type=int,
-                        help='Limit to downloading episodes newer than N days old. (Not implemented)')
-    parser.add_argument('--limit-episodes', metavar='N', nargs=1, type=int,
-                        help='Limit to downloading the N newest episodes.')
-    parser.add_argument('--reverse', action='store_true',
-                        help='Go through the entries in the RSS feeds en reverse order. (i.e. from old to new)')
-
-    parser.add_argument('--delete-old', action='store_true',
-                        help="Deletes any episode that does not fall within the limit parameters.")
-    parser.add_argument('-r', '--reset', action='store_true',
+    parser.add_argument('--limit', metavar='N', type=int,
+                        help='Only download first N items from each feed.')
+    parser.add_argument('--skip', metavar='N', type=int,
+                        help='Skip first N items from each feed.')
+    parser.add_argument('-r', '--reverse', action='store_true',
+                        help='Reverse the feed, i.e. oldest first.')
+    parser.add_argument('--reset', action='store_true',
                         help='Deletes contents of the download directory before downloading.')
 
-    parser.add_argument('-s', '--silent', action='store_true', help='Silences log output to sceen.')
-    parser.add_argument('-l', '--log', nargs=1, help='Saves log output to file.')
     return parser.parse_args()
 
 
-def main():
+@dataclass
+class FeedOutline:
+    type: str
+    text: str
+    title: str
+    htmlUrl: str
+    xmlUrl: str
+
+    def __key(self):
+        return self.type, self.text, self.title, self.htmlUrl, self.xmlUrl
+
+    def __hash__(self):
+        return hash(self.__key())
+
+    def __eq__(self, other):
+        if isinstance(other, FeedOutline):
+            return self.__key() == other.__key()
+        return NotImplemented
+
+
+@dataclass
+class FeedItem:
+    outline: FeedOutline
+    guid: str
+    title: str
+    link: str
+    date: date
+    enclosure_url: str
+    enclosure_mime: str
+
+    def filename(self) -> str:
+        return sanitize_filename(f'[{self.date}] {self.title}.{self.__extension()}')
+
+    def __hash__(self):
+        return hash(self.__key())
+
+    def __eq__(self, other):
+        if isinstance(other, FeedItem):
+            return self.__key() == other.__key()
+        return NotImplemented
+
+    def __key(self):
+        return (
+            self.guid, self.title, self.link, self.date,
+            self.enclosure_url, self.enclosure_mime,
+        )
+
+    def __extension(self) -> str:
+        # Getting the file extension without having to regex through an url
+        return {
+            'audio/mpeg': 'mp3',
+            'audio/x-m4a': 'm4a',
+            'audio/mpeg4-generic': 'mp4',
+            'audio/mp4': 'mp4',
+            'audio/ogg': 'ogg',
+            'audio/vorbis': 'ogg'
+        }.get(self.enclosure_mime, 'mp3')
+
+
+class FeedDownloader:
+    # Basic design from mCoding https://www.youtube.com/watch?v=ftmdDlwMwwQ
+
+    def __init__(
+            self,
+            outlines: Iterable[FeedOutline],
+            client: httpx.AsyncClient,
+            save_dir: pathlib.Path,
+            reverse: bool,
+            limit: int,
+            skip: int,
+            workers: int = 10,
+    ):
+        self.start_items = set(outlines)
+        self.client = client
+        self.todo: asyncio.Queue[FeedOutline | FeedItem] = asyncio.Queue()
+
+        self.seen = set()
+        self.done = set()
+
+        self.save_dir = save_dir
+        self.reverse = reverse
+        self.limit = limit
+        self.skip = skip
+        self.num_workers = workers
+
+    async def run(self):
+        await self.on_found_items(self.start_items)  # prime the queue
+        workers = [asyncio.create_task(self.worker()) for _ in range(self.num_workers)]
+        await self.todo.join()
+
+        for worker in workers:
+            worker.cancel()
+
+    async def worker(self):
+        while True:
+            try:
+                await self.process_one()
+            except asyncio.CancelledError:
+                return
+
+    async def process_one(self):
+        task_item = await self.todo.get()
+
+        try:
+            if isinstance(task_item, FeedOutline):
+                feed_outline = task_item
+                await self.fetch_feed_items(feed_outline)
+            elif isinstance(task_item, FeedItem):
+                feed_item = task_item
+                await self.fetch_feed_enclosures(feed_item)
+            else:
+                assert False, "unreachable type(task_item)"
+        except Exception as e:
+            print(f'exception occurred for {type(task_item)} titled "{task_item.title}" at line {sys.exc_info()[2].tb_lineno} {e.__repr__()}')
+            traceback.print_tb(sys.exc_info()[2])
+            # TODO: retry handling here...
+            pass
+        finally:
+            self.todo.task_done()
+
+    async def fetch_feed_items(self, outline: FeedOutline):
+        outline_print = f'{outline.title}'
+        message = 'fetching feed items'
+        print(f'{outline_print} :::: {message}')
+
+        # TODO: rate limit here...
+        #   self.num_workers takes care of total connections
+        #   but connections per domain should also be limited
+        #   as well as connections per time
+        await asyncio.sleep(2.0)
+
+        response = await self.client.get(outline.xmlUrl, follow_redirects=True)
+
+        if response.status_code not in range(200, 300):
+            message = f'fetching failed with http status {response.status_code}'
+            print(f'{outline_print} :::: {message}')
+            return
+
+        feed: ElementTree = etree.fromstring(response.read(), base_url=outline.xmlUrl)
+        feed_elements = feed.findall("./channel/item[enclosure]")
+        message = f'found {len(feed_elements)} items with enclosures'
+        print(f'{outline_print} :::: {message}')
+
+        feed_items = [
+            FeedItem(
+                outline=outline,
+                guid=element.findtext('guid'),
+                title=element.findtext('title'),
+                link=element.findtext('link'),
+                date=parse_date(element.findtext('pubDate')).date(),
+                enclosure_url=element.find('enclosure').get('url'),
+                enclosure_mime=element.find('enclosure').get('type')
+            )
+            for element in feed_elements
+        ]
+
+        if self.reverse:
+            feed_items.reverse()
+        if self.skip:
+            feed_items = feed_items[self.skip:]
+        if self.limit:
+            feed_items = feed_items[:self.limit]
+
+        await self.on_found_items(set(feed_items))
+
+    async def fetch_feed_enclosures(self, item: FeedItem):
+        outline_print = f'{item.outline.title}'
+        item_print = f'[{item.date}] {item.title}'
+        message = 'fetching feed enclosure'
+        print(f'{outline_print} :::: {item_print} :::: {message}')
+
+        # TODO: rate limit here...
+        #   self.num_workers takes care of total connections
+        #   but connections per domain should also be limited
+        #   as well as connections per time
+        await asyncio.sleep(2.0)
+
+        url: str = item.enclosure_url
+        feed_name: str = item.outline.title
+        filename: str = item.filename()
+
+        feed_dir = self.save_dir.joinpath(feed_name)
+        feed_dir.mkdir(parents=True, exist_ok=True)
+        real_path = feed_dir.joinpath(filename)
+        if real_path.exists():
+            print(f'{outline_print} :::: {item_print} :::: skipped fetching enclosure')
+            return
+
+        response = await self.client.get(url, follow_redirects=True)
+
+        temp_fd, temp_path = tempfile.mkstemp(dir=feed_dir)
+        with open(temp_fd, 'wb') as temp_file:
+            for chunk in response.iter_bytes():
+                temp_file.write(chunk)
+            os.rename(src=temp_path, dst=real_path)
+
+        print(f'{outline_print} :::: {item_print} :::: finished fetching enclosure')
+
+    async def on_found_items(self, items: set[FeedOutline | FeedItem]):
+        new = items - self.seen
+        self.seen.update(new)
+
+        for item in new:
+            await self.put_todo(item)
+
+    async def put_todo(self, item: FeedOutline | FeedItem):
+        await self.todo.put(item)
+
+
+def outlines_from_opml(opml_path):
+    with open(opml_path, 'r') as f:
+        opml: ElementTree = etree.parse(f)
+        feeds = opml.findall("//outline[@type='rss']")
+    for feed in feeds:
+        yield FeedOutline(**{key: feed.get(key) for key in feed.keys()})
+    return
+
+
+def sanitize_filename(filename: str) -> str:
+    # Remove characters that doesn't play well with 'nix and mac filesystems.'
+    return filename.replace('/', '-').replace(':', '')
+
+
+async def main():
     args = parse_args()
-    logger = functools.partial(the_logger, args)
 
-    # Ugly-ass hack for getting the file extension without having to regex through a url
-    file_extensions = {'audio/mpeg': '.mp3', 'audio/x-m4a': '.m4a', 'audio/mpeg4-generic': '.mp4', 'audio/mp4': '.mp4',
-                       'audio/ogg': '.ogg', 'audio/vorbis': '.ogg'}
+    # Setup download directory
+    download_dir = pathlib.Path(args.dir)
+    download_dir.mkdir(parents=True, exist_ok=True)
 
-    # Get podcast feeds from OPML file or URL
-    parsed_opml = opml.parse(args.OPML)
-
-    # Setup current working directory.
-    if args.dir is not None:
-        os.makedirs(args.dir, exist_ok=True)
-        os.chdir(args.dir)
-    download_dir = os.getcwd()
-
-    # Delete directory contents if reset option is given.
+    # Delete download directory contents if reset option is given.
     if args.reset:
         for root, dirs, files in os.walk(download_dir):
             for f in files:
@@ -68,110 +270,20 @@ def main():
             for d in dirs:
                 shutil.rmtree(os.path.join(root, d))
 
-    # Set up urllib
-    http = urllib3.PoolManager()
-    urllib3.disable_warnings()
+    task_queue = asyncio.Queue()
 
-    # Go through each feed
-    for index_opml, opml_outline in enumerate(parsed_opml):
-        # Read the RSS Feed from the 'xmlurl' attribute of the opml outline
-        # We go through some trouble to normalize formatting of the attribute keys
-        # since they are case-sensitive *sigh*  -.-
-        opml_outline_keys = opml_outline._root.attrib.keys()
-        rss_feed = None
-        for _, key in enumerate(opml_outline_keys):
-            if key.lower() == 'xmlurl':
-                rss_feed = feedparser.parse(opml_outline._root.attrib[key])
-                break
+    outlines = outlines_from_opml(args.opml)
+    downloader = FeedDownloader(
+        outlines=outlines,
+        client=httpx.AsyncClient(),
+        save_dir=download_dir,
+        reverse=args.reverse,
+        limit=args.limit,
+        skip=args.skip,
+    )
 
-        if rss_feed is None:
-            continue
-
-        # Optionally go through the feed from old to new
-        if args.reverse:
-            rss_feed.entries.reverse()
-
-        # Get the feed title, but sometimes the feed title isn't defined, in that case get it from the opml file
-        # instead.
-        try:
-            rss_feed_title = rss_feed.feed.title
-        except AttributeError:
-            rss_feed_title = opml_outline.title
-
-        logger(1,
-               f'Downloading podcast {index_opml + 1}/{len(parsed_opml)}: {rss_feed_title} with {len(rss_feed.entries)} entries.')
-
-        # Make the directory for the podcast
-        # https://stackoverflow.com/questions/12517451/automatically-creating-directories-with-file-output
-        os.chdir(download_dir)
-        os.makedirs(rss_feed_title, exist_ok=True)
-        os.chdir(rss_feed_title)
-        existing_files = os.listdir()
-
-        # Loop through each episode in the RSS feed
-        for index_feed, entry in enumerate(rss_feed.entries):
-            # Exit episode loop early if episode-limit is set and has been reached.
-            if (args.limit_episodes is not None) and (index_feed >= args.limit_episodes[0]):
-                continue
-            # TODO: Exit episode loop early if days-limit is set and has been reached.
-            # if (args.limit_days is not None) and
-
-            # Go to next episode if there are no enclosures in the episode.
-            if len(entry.enclosures) == 0:
-                logger(2, f'No enclosure found in RSS entry, skipping {index_feed + 1}/{len(rss_feed.entries)}')
-                continue
-
-            year = f'{entry.published_parsed[0]:02}'
-            month = f'{entry.published_parsed[1]:02}'
-            day = f'{entry.published_parsed[2]:02}'
-            date = f'{year}-{month}-{day}'
-            audio_filename = f'[{date}] {entry.title}'
-
-            # Get the url of the enclosed audio file
-            try:
-                enclosure_url = entry.enclosures[0].href
-            except AttributeError:
-                logger(2, f'No href found in RSS enclosure, skipping {index_feed + 1}/{len(rss_feed.entries)}')
-                continue
-
-            # Find the Content-Type type in the RSS enclosure
-            file_extension = None
-            filename = None
-            try:
-                file_extension = file_extensions.get(entry.enclosures[0].type, '')
-                filename = sanitize_filename(audio_filename + file_extension)
-            except AttributeError:
-                pass
-
-            # Skip download if the file already exists
-            if any((sanitize_filename(audio_filename) == os.path.splitext(file)[0] for file in existing_files)):
-                if file_extension is None:
-                    logger(2, f'File already exists, skipping {index_feed + 1}/{len(rss_feed.entries)}: {audio_file}')
-                else:
-                    logger(2, f'File already exists, skipping {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
-                continue
-
-            with http.request('GET', enclosure_url, preload_content=False) as r:
-                if r.status not in range(200, 299):
-                    if file_extension is None:
-                        logger(2, f'Response had HTTP status {r.status}, skipping {index_feed + 1}/{len(rss_feed.entries)}: {audio_file}')
-                    else:
-                        logger(2, f'Response had HTTP status {r.status}, skipping {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
-                    continue
-
-                # If the Content-Type couldn't be found in the enclosure, get it when downloading
-                if file_extension is None or file_extension == '':
-                    file_extension = file_extensions.get(r.headers['Content-Type'], '')
-                    filename = sanitize_filename(audio_filename + file_extension)
-
-                with open('temporary_download_file', 'wb') as audio_file:
-                    logger(2, f'Downloading {index_feed + 1}/{len(rss_feed.entries)}: {filename}')
-                    shutil.copyfileobj(r, audio_file)
-                    os.rename('temporary_download_file', filename)
+    await downloader.run()
 
 
 if __name__ == '__main__':
-    try:
-        main()
-    except KeyboardInterrupt:
-        exit(1)
+    asyncio.run(main())
